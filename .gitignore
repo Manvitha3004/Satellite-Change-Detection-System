@@ -1,0 +1,63 @@
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*.so
+*.pyd
+*.pyo
+*.pkl
+*.egg-info/
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+# VSCode settings
+.vscode/
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# Notebooks (exclude large exploratory files)
+notebooks/
+
+# Python virtual environments
+.env
+.venv/
+ENV/
+
+
+# Environment variables
+.env.*
+
+# Data and results (large/generated files)
+results/
+results.zip
+models/*.pth
+data/patches/
+
+# Raw satellite data (large)
+Dataset/
+
+# Logs and temp files
+*.log
+*.tmp
+*.bak
+
+# Ignore configs with secrets (if any)
+config.yaml
+
+# Ignore training artifacts
+training_history.png
+
+# Allow documentation and code
+!README.md
+!PROJECT_DOCUMENTATION.txt
+!requirements.txt
+!requirements_cloud.txt
+!src/
+!scripts/
+!configs/
+!train_cpu.py
+!split_patches.py
+!split_patches_quick.py
