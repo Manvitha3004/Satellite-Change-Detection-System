@@ -180,26 +180,23 @@ def export_to_shapefile(
         return
     
     # Work around NumPy 2.x GeoPandas export issue by writing via Fiona
-    # Ensure geometry type consistency for Shapefile: use MultiPolygon
+    # Ensure geometry type consistency for Shapefile: write MultiPolygon
     geom_type = 'MultiPolygon'
-    gdf_std = gdf.copy()
-    gdf_std['geometry'] = gdf_std['geometry'].apply(
-        lambda geom: MultiPolygon([geom]) if isinstance(geom, Polygon) else geom
-    )
-    # Keep a small, safe set of attributes
+    # Keep a small, safe set of attributes (Shapefile field name <= 10 chars)
     props = {}
-    if 'area' in gdf_std.columns:
+    if 'area' in gdf.columns:
         props['area'] = 'float:24.6'
-    if 'perimeter' in gdf_std.columns:
+    if 'perimeter' in gdf.columns:
         props['perimeter'] = 'float:24.6'
     schema = {
         'geometry': geom_type,
         'properties': props
     }
-    crs = gdf_std.crs
+    crs = gdf.crs
     output_path = str(output_path)
+    written = 0
     with fiona.open(output_path, mode='w', driver=driver, schema=schema, crs=crs) as col:
-        for _, row in gdf_std.iterrows():
+        for _, row in gdf.iterrows():
             geom = row.geometry
             if geom is None or geom.is_empty:
                 continue
@@ -210,7 +207,8 @@ def export_to_shapefile(
                 'properties': {k: float(row[k]) for k in props.keys() if k in row}
             }
             col.write(record)
-    print(f"✓ Saved {len(gdf_std)} polygons to {output_path}")
+            written += 1
+    print(f"✓ Saved {written} polygons to {output_path}")
 
 
 def export_to_geojson(
@@ -228,10 +226,35 @@ def export_to_geojson(
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     
-    # Save
-    gdf.to_file(output_path, driver='GeoJSON')
-    
-    print(f"✓ Saved {len(gdf)} polygons to {output_path}")
+    # Write via Fiona to avoid GeoPandas/NumPy 2.x issues
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    # Standardize to MultiPolygon in the writer loop
+    geom_type = 'MultiPolygon'
+    props = {}
+    if 'area' in gdf.columns:
+        props['area'] = 'float:24.6'
+    if 'perimeter' in gdf.columns:
+        props['perimeter'] = 'float:24.6'
+    schema = {
+        'geometry': geom_type,
+        'properties': props
+    }
+    written = 0
+    with fiona.open(str(output_path), mode='w', driver='GeoJSON', schema=schema, crs=gdf.crs) as col:
+        for _, row in gdf.iterrows():
+            geom = row.geometry
+            if geom is None or geom.is_empty:
+                continue
+            if isinstance(geom, Polygon):
+                geom = MultiPolygon([geom])
+            record = {
+                'geometry': mapping(geom),
+                'properties': {k: float(row[k]) for k in props.keys() if k in row}
+            }
+            col.write(record)
+            written += 1
+    print(f"✓ Saved {written} polygons to {output_path}")
 
 
 def raster_to_vector_pipeline(
