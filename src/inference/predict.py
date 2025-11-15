@@ -19,6 +19,7 @@ sys.path.append(str(Path(__file__).parent.parent))
 
 from models.siamese_unet import create_model
 from data.preprocessing import normalize_bands, read_and_stack_bands
+from typing import Iterable
 
 
 class TiledPredictor:
@@ -239,6 +240,129 @@ class TiledPredictor:
         return prediction_binary
 
 
+def _compute_ndvi(stack: np.ndarray, red_idx: int = 1, nir_idx: int = 2) -> np.ndarray:
+    """
+    Compute NDVI from a CxHxW stack assuming bands order includes Red and NIR.
+    Defaults to ResourceSat-2 LISS-IV order [G, R, NIR] -> red_idx=1, nir_idx=2.
+    """
+    if stack.shape[0] <= max(red_idx, nir_idx):
+        return np.zeros(stack.shape[1:], dtype=np.float32)
+    red = stack[red_idx].astype(np.float32)
+    nir = stack[nir_idx].astype(np.float32)
+    denom = (nir + red)
+    denom[denom == 0] = 1e-6
+    ndvi = (nir - red) / denom
+    return ndvi.astype(np.float32)
+
+
+def _otsu_threshold(img: np.ndarray, nbins: int = 256) -> float:
+    """
+    Numpy-only Otsu threshold for a non-negative image.
+    Returns a threshold value; if computation fails, returns high percentile.
+    """
+    data = img[np.isfinite(img)].ravel()
+    if data.size == 0:
+        return float(np.inf)
+    data = data[data >= 0]
+    if data.size == 0:
+        return float(np.inf)
+    hist, bin_edges = np.histogram(data, bins=nbins, range=(data.min(), data.max()))
+    hist = hist.astype(np.float64)
+    prob = hist / hist.sum() if hist.sum() > 0 else hist
+    omega = np.cumsum(prob)
+    mu = np.cumsum(prob * (bin_edges[:-1] + bin_edges[1:]) / 2.0)
+    mu_t = mu[-1] if mu.size > 0 else 0.0
+    sigma_b2 = (mu_t * omega - mu) ** 2 / (omega * (1 - omega) + 1e-12)
+    idx = np.nanargmax(sigma_b2)
+    thr = (bin_edges[idx] + bin_edges[idx + 1]) / 2.0
+    if not np.isfinite(thr):
+        thr = np.percentile(data, 99.5)
+    return float(thr)
+
+
+def _unsupervised_change_mask_tiled(
+    img1: np.ndarray,
+    img2: np.ndarray,
+    tile_size: int = 2048,
+    force_nonempty: bool = True
+) -> np.ndarray:
+    """
+    Tile-based unsupervised change detection to avoid memory overflow.
+    Uses CVA + NDVI delta with Otsu thresholding.
+    Returns binary uint8 mask (H, W).
+    """
+    C, H, W = img1.shape
+    
+    # Sample pixels for global statistics
+    rng = np.random.default_rng(42)
+    max_samples = 500_000
+    n_pix = H * W
+    sample_idx = rng.choice(n_pix, size=min(max_samples, n_pix), replace=False)
+    
+    # Compute per-band percentiles from samples
+    p1_low, p1_high = [], []
+    p2_low, p2_high = [], []
+    for c in range(C):
+        s1 = img1[c].reshape(-1)[sample_idx].astype(np.float32)
+        s2 = img2[c].reshape(-1)[sample_idx].astype(np.float32)
+        p1_low.append(np.percentile(s1, 2))
+        p1_high.append(np.percentile(s1, 98))
+        p2_low.append(np.percentile(s2, 2))
+        p2_high.append(np.percentile(s2, 98))
+    
+    # Process in tiles to avoid OOM
+    score_map = np.zeros((H, W), dtype=np.float32)
+    
+    for r in range(0, H, tile_size):
+        for c_idx in range(0, W, tile_size):
+            rh = min(tile_size, H - r)
+            cw = min(tile_size, W - c_idx)
+            
+            t1 = img1[:, r:r+rh, c_idx:c_idx+cw].astype(np.float32)
+            t2 = img2[:, r:r+rh, c_idx:c_idx+cw].astype(np.float32)
+            
+            # Normalize using global stats
+            for band in range(C):
+                denom1 = p1_high[band] - p1_low[band]
+                if denom1 == 0:
+                    denom1 = 1.0
+                t1[band] = np.clip((t1[band] - p1_low[band]) / denom1, 0, 1)
+                
+                denom2 = p2_high[band] - p2_low[band]
+                if denom2 == 0:
+                    denom2 = 1.0
+                t2[band] = np.clip((t2[band] - p2_low[band]) / denom2, 0, 1)
+            
+            # CVA magnitude
+            diff = t2 - t1
+            mag = np.linalg.norm(diff, axis=0)
+            
+            # NDVI delta
+            ndvi1 = _compute_ndvi(t1)
+            ndvi2 = _compute_ndvi(t2)
+            d_ndvi = np.abs(ndvi2 - ndvi1)
+            
+            # Combined score
+            score_tile = 0.7 * mag + 0.3 * d_ndvi
+            score_map[r:r+rh, c_idx:c_idx+cw] = score_tile
+    
+    # Normalize and threshold
+    s_min, s_max = np.percentile(score_map, 1), np.percentile(score_map, 99)
+    if s_max > s_min:
+        score_map = np.clip((score_map - s_min) / (s_max - s_min), 0, 1)
+    else:
+        score_map = (score_map - score_map.min()) / (score_map.max() - score_map.min() + 1e-6)
+    
+    thr = _otsu_threshold(score_map)
+    mask = (score_map >= thr).astype(np.uint8)
+    
+    if force_nonempty and mask.sum() == 0:
+        p = np.percentile(score_map, 99.5)
+        mask = (score_map >= p).astype(np.uint8)
+    
+    return mask
+
+
 def load_model_for_inference(
     checkpoint_path: Path,
     device: torch.device = torch.device('cpu'),
@@ -318,7 +442,8 @@ def predict_from_band_files(
     tile_size: int = 256,
     overlap: int = 64,
     threshold: float = 0.5,
-    band_indices: Optional[List[int]] = None
+    band_indices: Optional[List[int]] = None,
+    enable_unsupervised_fallback: bool = True
 ) -> np.ndarray:
     """
     Predict change mask from separate band files (ResourceSat-2 format).
@@ -427,6 +552,14 @@ def predict_from_band_files(
     
     # Binarize
     prediction_binary = (prediction >= threshold).astype(np.uint8)
+
+    # If model predicts blank (or near-blank), use an unsupervised fallback
+    total_pixels = prediction_binary.size
+    change_pixels = int(np.sum(prediction_binary))
+    if enable_unsupervised_fallback and (change_pixels == 0 or change_pixels / max(total_pixels, 1) < 1e-5):
+        print("  Model prediction is empty/near-empty. Running unsupervised fallback (CVA+ΔNDVI+Otsu)...")
+        fallback_mask = _unsupervised_change_mask_tiled(image1, image2, tile_size=2048, force_nonempty=True)
+        prediction_binary = fallback_mask.astype(np.uint8)
     
     # Save output with georeference
     profile = {

@@ -10,9 +10,10 @@ from rasterio.transform import Affine
 from pathlib import Path
 from typing import Optional, Tuple, List
 import geopandas as gpd
-from shapely.geometry import shape, Polygon, MultiPolygon
+from shapely.geometry import shape, Polygon, MultiPolygon, mapping
 from shapely import simplify
 import warnings
+import fiona
 
 
 def vectorize_mask(
@@ -177,8 +178,39 @@ def export_to_shapefile(
     if gdf.empty:
         print(f"[WARN] GeoDataFrame is empty. No shapefile will be written to {output_path}")
         return
-    gdf.to_file(output_path, driver=driver)
-    print(f"✓ Saved {len(gdf)} polygons to {output_path}")
+    
+    # Work around NumPy 2.x GeoPandas export issue by writing via Fiona
+    # Ensure geometry type consistency for Shapefile: use MultiPolygon
+    geom_type = 'MultiPolygon'
+    gdf_std = gdf.copy()
+    gdf_std['geometry'] = gdf_std['geometry'].apply(
+        lambda geom: MultiPolygon([geom]) if isinstance(geom, Polygon) else geom
+    )
+    # Keep a small, safe set of attributes
+    props = {}
+    if 'area' in gdf_std.columns:
+        props['area'] = 'float:24.6'
+    if 'perimeter' in gdf_std.columns:
+        props['perimeter'] = 'float:24.6'
+    schema = {
+        'geometry': geom_type,
+        'properties': props
+    }
+    crs = gdf_std.crs
+    output_path = str(output_path)
+    with fiona.open(output_path, mode='w', driver=driver, schema=schema, crs=crs) as col:
+        for _, row in gdf_std.iterrows():
+            geom = row.geometry
+            if geom is None or geom.is_empty:
+                continue
+            if isinstance(geom, Polygon):
+                geom = MultiPolygon([geom])
+            record = {
+                'geometry': mapping(geom),
+                'properties': {k: float(row[k]) for k in props.keys() if k in row}
+            }
+            col.write(record)
+    print(f"✓ Saved {len(gdf_std)} polygons to {output_path}")
 
 
 def export_to_geojson(
