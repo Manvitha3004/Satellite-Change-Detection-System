@@ -90,8 +90,19 @@ def main():
     
     # Auto-detect data source (LISS-4 or Sentinel-2)
     print("Detecting data source...")
-    s2_product1 = detect_sentinel2_product(image1_dir)
-    s2_product2 = detect_sentinel2_product(image2_dir)
+    
+    # Try Sentinel-2 detection with error handling
+    s2_product1 = None
+    s2_product2 = None
+    s2_error = None
+    
+    try:
+        from data.sentinel2_loader import Sentinel2Product
+        if image1_dir.name.endswith('.SAFE') or list(image1_dir.glob('*.SAFE')):
+            s2_product1 = Sentinel2Product(image1_dir)
+            s2_product2 = Sentinel2Product(image2_dir)
+    except Exception as e:
+        s2_error = str(e)
     
     if s2_product1 and s2_product2:
         print("  Data source: Sentinel-2")
@@ -105,6 +116,16 @@ def main():
         print(f"  Using bands: {', '.join(band_names1)}")
         data_source = 'sentinel2'
     else:
+        # Check if user tried to use Sentinel-2 but it failed
+        if image1_dir.name.endswith('.SAFE') or image2_dir.name.endswith('.SAFE'):
+            print("  ❌ Sentinel-2 products detected but invalid/incomplete")
+            if s2_error:
+                print(f"  Error: {s2_error}")
+            print("\n  Your .SAFE folders appear to have empty GRANULE directories.")
+            print("  Sentinel-2 products need actual band imagery (.jp2 files).")
+            print("  Download complete products from ESA Copernicus Hub or use ResourceSat-2 data.")
+            return
+        
         print("  Data source: ResourceSat-2 (LISS-4)")
         
         # Find LISS-4 band files
@@ -115,6 +136,9 @@ def main():
             print("❌ No band files found!")
             print(f"T1 directory: {image1_dir}")
             print(f"T2 directory: {image2_dir}")
+            print("\nExpected structure:")
+            print("  ResourceSat-2: Dataset/R2F.../R2F.../BAND*.tif")
+            print("  Sentinel-2: Dataset/*.SAFE/ (with imagery in GRANULE folders)")
             return
         
         print(f"  T1: {len(band_files1)} bands")
