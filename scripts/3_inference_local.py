@@ -18,6 +18,7 @@ from inference.predict import load_model_for_inference, predict_from_band_files
 from postprocessing.refine_mask import refine_binary_mask
 from postprocessing.vectorize import raster_to_vector_pipeline
 from data.preprocessing import read_and_stack_bands
+from data.sentinel2_loader import detect_sentinel2_product
 import numpy as np
 import rasterio
 
@@ -87,27 +88,52 @@ def main():
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     
-    # Find band files
-    print("Finding band files...")
-    band_files1 = sorted(list(image1_dir.glob('BAND*.tif')))
-    band_files2 = sorted(list(image2_dir.glob('BAND*.tif')))
+    # Auto-detect data source (LISS-4 or Sentinel-2)
+    print("Detecting data source...")
+    s2_product1 = detect_sentinel2_product(image1_dir)
+    s2_product2 = detect_sentinel2_product(image2_dir)
     
-    if len(band_files1) == 0 or len(band_files2) == 0:
-        print("❌ No band files found!")
-        print(f"T1 directory: {image1_dir}")
-        print(f"T2 directory: {image2_dir}")
-        return
-    
-    print(f"  T1: {len(band_files1)} bands")
-    print(f"  T2: {len(band_files2)} bands")
+    if s2_product1 and s2_product2:
+        print("  Data source: Sentinel-2")
+        print(f"  T1: {s2_product1}")
+        print(f"  T2: {s2_product2}")
+        
+        # Get Green, Red, NIR bands (B03, B04, B08)
+        band_files1, band_names1 = s2_product1.get_rgb_nir_bands()
+        band_files2, band_names2 = s2_product2.get_rgb_nir_bands()
+        
+        print(f"  Using bands: {', '.join(band_names1)}")
+        data_source = 'sentinel2'
+    else:
+        print("  Data source: ResourceSat-2 (LISS-4)")
+        
+        # Find LISS-4 band files
+        band_files1 = sorted(list(image1_dir.glob('BAND*.tif')))
+        band_files2 = sorted(list(image2_dir.glob('BAND*.tif')))
+        
+        if len(band_files1) == 0 or len(band_files2) == 0:
+            print("❌ No band files found!")
+            print(f"T1 directory: {image1_dir}")
+            print(f"T2 directory: {image2_dir}")
+            return
+        
+        print(f"  T1: {len(band_files1)} bands")
+        print(f"  T2: {len(band_files2)} bands")
+        data_source = 'liss4'
     
     # Generate output name
     if args.output_name:
         output_name = args.output_name
     else:
         # Extract dates from directory names
-        date1 = image1_dir.parent.name.split('F')[1][:11] if 'F' in image1_dir.parent.name else 'T1'
-        date2 = image2_dir.parent.name.split('F')[1][:11] if 'F' in image2_dir.parent.name else 'T2'
+        if data_source == 'sentinel2':
+            # Sentinel-2 format: S2A_MSIL2A_20200328T053641_...
+            date1 = s2_product1.safe_path.name.split('_')[2][:8] if len(s2_product1.safe_path.name.split('_')) > 2 else 'T1'
+            date2 = s2_product2.safe_path.name.split('_')[2][:8] if len(s2_product2.safe_path.name.split('_')) > 2 else 'T2'
+        else:
+            # ResourceSat-2 format: R2F18MAR2020...
+            date1 = image1_dir.parent.name.split('F')[1][:11] if 'F' in image1_dir.parent.name else 'T1'
+            date2 = image2_dir.parent.name.split('F')[1][:11] if 'F' in image2_dir.parent.name else 'T2'
         output_name = f"Change_Mask_{date1}_{date2}"
     
     raster_output = output_dir / f"{output_name}.tif"

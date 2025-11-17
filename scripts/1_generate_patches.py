@@ -16,6 +16,7 @@ sys.path.append(str(Path(__file__).parent.parent / 'src'))
 
 from data.patch_generator import PatchGenerator, find_resourcesat2_bands
 from data.preprocessing import verify_image_pair
+from data.sentinel2_loader import detect_sentinel2_product
 
 
 def main():
@@ -72,20 +73,40 @@ def main():
     print(f"  Train split: {train_split}")
     print(f"{'='*60}\n")
     
-    # Find ResourceSat-2 image pairs
+    # Auto-detect data source (LISS-4 or Sentinel-2)
     data_dir = Path(args.data_dir)
-    print("Searching for ResourceSat-2 data...")
+    print("Detecting data source...")
     
-    image_pairs = find_resourcesat2_bands(data_dir)
+    # Check for Sentinel-2 .SAFE folders
+    safe_folders = list(data_dir.glob('*.SAFE'))
+    
+    if safe_folders:
+        print(f"  Data source: Sentinel-2 ({len(safe_folders)} products found)")
+        image_pairs = {}
+        
+        for safe_folder in safe_folders:
+            try:
+                s2_product = detect_sentinel2_product(safe_folder)
+                if s2_product:
+                    # Extract date from product name
+                    date = s2_product.safe_path.name.split('_')[2][:8]  # YYYYMMDD
+                    band_files, _ = s2_product.get_rgb_nir_bands()
+                    image_pairs[date] = band_files
+                    print(f"    {date}: {s2_product.product_level}, 3 bands (Green, Red, NIR)")
+            except Exception as e:
+                print(f"    Warning: Could not process {safe_folder.name}: {e}")
+    else:
+        print("  Data source: ResourceSat-2 (LISS-4)")
+        image_pairs = find_resourcesat2_bands(data_dir)
     
     if len(image_pairs) == 0:
-        print("❌ No ResourceSat-2 data found!")
-        print("Expected directory structure: Dataset/R2F**/R2F**/BAND*.tif")
+        print("❌ No satellite data found!")
+        print("Expected structure:")
+        print("  - ResourceSat-2: Dataset/R2F**/R2F**/BAND*.tif")
+        print("  - Sentinel-2: Dataset/*.SAFE/")
         return
     
-    print(f"Found {len(image_pairs)} time points:")
-    for date, bands in image_pairs.items():
-        print(f"  {date}: {len(bands)} bands")
+    print(f"\nFound {len(image_pairs)} time points:")
     
     # Verify we have at least 2 time points for change detection
     if len(image_pairs) < 2:

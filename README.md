@@ -4,7 +4,7 @@ Production-ready deep learning system for detecting changes in bi-temporal satel
 
 ## 🎯 Project Overview
 
-This system implements a **Siamese U-Net** architecture with EfficientNet-B0 backbone for semantic change detection in satellite imagery. It's designed to:
+This system implements a **Siamese U-Net** architecture (default encoder: ResNet-18; auto-detected from your checkpoint) for semantic change detection in satellite imagery. It's designed to:
 
 - **Train on GPU** (Kaggle/Google Colab) with mixed precision
 - **Run inference on CPU** (16GB RAM, no GPU required)
@@ -20,13 +20,15 @@ This system implements a **Siamese U-Net** architecture with EfficientNet-B0 bac
 ✅ Complete training pipeline with validation and checkpointing  
 ✅ Mixed precision training (AMP) for faster GPU training  
 ✅ CRS and geotransform preservation throughout pipeline  
+✅ Robust vector export using Fiona (NumPy 2.0 compatible)  
+✅ Unsupervised fallback (CVA + ΔNDVI + Otsu) when model predicts empty masks
 
 ---
 
 ## 📁 Project Structure
 
 ```
-satellite-change-detection/
+PS-10/
 ├── Dataset/                          # Your satellite data (ResourceSat-2, Sentinel-2)
 │   ├── R2F18MAR2020.../             # ResourceSat-2 March 2020
 │   │   └── BAND2.tif, BAND3.tif, BAND4.tif
@@ -39,15 +41,15 @@ satellite-change-detection/
 │   │   ├── dataset.py               # PyTorch Dataset with augmentation
 │   │   └── preprocessing.py         # Normalization and alignment
 │   ├── models/
-│   │   ├── siamese_unet.py          # EfficientNet-B0 + U-Net architecture
+│   │   ├── siamese_unet.py          # Siamese U-Net (ResNet-18 default)
 │   │   └── losses.py                # Dice + Focal loss
 │   ├── training/
 │   │   └── train.py                 # Complete training loop
 │   ├── inference/
-│   │   └── predict.py               # CPU-optimized tile-based inference
+│   │   └── predict.py               # CPU-optimized tiled inference + unsupervised fallback
 │   ├── postprocessing/
 │   │   ├── refine_mask.py           # Morphological operations
-│   │   └── vectorize.py             # Raster to shapefile conversion
+│   │   └── vectorize.py             # Raster→Vector via Fiona (Shapefile/GeoJSON)
 │   └── utils/
 │       ├── metrics.py               # IoU, F1, precision, recall
 │       └── visualization.py         # Plotting utilities
@@ -83,19 +85,27 @@ cd D:\PS-10
 python -m venv venv
 .\venv\Scripts\Activate.ps1
 
-# Install dependencies
+# Install dependencies (CPU-only stack)
 pip install -r requirements.txt
+
+# If Torch fails on your platform, try the PyTorch index (CPU):
+# pip install torch==2.0.1 torchvision==0.15.2 torchaudio==2.0.2 --index-url https://download.pytorch.org/whl/cpu
 ```
 
 ### 2. Generate Training Patches (Local)
 
 ```powershell
-# Process ResourceSat-2 image pairs into 256×256 patches
+# Process satellite image pairs into 256×256 patches
+# Auto-detects ResourceSat-2 or Sentinel-2 from folder structure
 python scripts\1_generate_patches.py `
     --data_dir Dataset `
     --output_dir data\patches `
     --config configs\config.yaml
 ```
+
+**Supported structures:**
+- ResourceSat-2: `Dataset/R2F.../R2F.../BAND*.tif`
+- Sentinel-2: `Dataset/*.SAFE/`
 
 **Output:**
 - `data/patches/train/` - Training patches (80%)
@@ -141,6 +151,8 @@ python scripts\1_generate_patches.py `
 
 ### 4. Run Inference (Local - CPU)
 
+#### ResourceSat-2 Data
+
 ```powershell
 # Predict changes between two time points
 python scripts\3_inference_local.py `
@@ -150,13 +162,40 @@ python scripts\3_inference_local.py `
     --output_dir outputs\predictions
 ```
 
+#### Sentinel-2 Data
+
+```powershell
+# Predict changes from Sentinel-2 .SAFE products
+python scripts\3_inference_local.py `
+    --model models\best_model.pth `
+    --image1_dir Dataset\S2A_MSIL2A_20200328T053641_N0500_R005_T43RCM_20230601T154807.SAFE `
+    --image2_dir Dataset\S2B_MSIL2A_20250307T053649_N0511_R005_T43RCM_20250307T082113.SAFE `
+    --output_dir outputs\predictions
+```
+
+**Auto-detection:** The script automatically detects whether you're using ResourceSat-2 or Sentinel-2 data based on folder structure.
+
 **Output:**
 - `Change_Mask_*.tif` - Binary change mask (GeoTIFF)
 - `Change_Mask_*_refined.tif` - Post-processed mask
 - `Change_Mask_*.shp` - Vector polygons (+ .shx, .dbf, .prj)
+- `Change_Mask_*.geojson` - Optional GeoJSON (see below)
 
 **Memory usage:** <16GB RAM (tile-based processing)  
-**Speed:** ~5-10 minutes for 18K×17K image on Intel i7-13620H
+**Speed:** ~10-15 minutes for 18K×17K image on Intel i7-13620H (CPU)
+
+#### Export GeoJSON alongside Shapefile
+
+```powershell
+python -c "import sys; from pathlib import Path; sys.path.append('src'); from postprocessing.vectorize import raster_to_vector_pipeline; p=Path('results/Change_Mask_18MAR202004_27JAN202507_refined.tif'); raster_to_vector_pipeline(p, Path('results/Change_Mask_18MAR202004_27JAN202507.shp'), output_geojson=Path('results/Change_Mask_18MAR202004_27JAN202507.geojson'))"
+```
+
+#### Zip outputs (rasters + vectors)
+
+```powershell
+if (Test-Path "results\Change_Mask_18MAR202004_27JAN202507_package.zip") { Remove-Item -Force "results\Change_Mask_18MAR202004_27JAN202507_package.zip" }
+Compress-Archive -Path "results\Change_Mask_18MAR202004_27JAN202507.tif","results\Change_Mask_18MAR202004_27JAN202507_refined.tif","results\Change_Mask_18MAR202004_27JAN202507.shp","results\Change_Mask_18MAR202004_27JAN202507.shx","results\Change_Mask_18MAR202004_27JAN202507.dbf","results\Change_Mask_18MAR202004_27JAN202507.prj","results\Change_Mask_18MAR202004_27JAN202507.cpg","results\Change_Mask_18MAR202004_27JAN202507.geojson" -DestinationPath "results\Change_Mask_18MAR202004_27JAN202507_package.zip"
+```
 
 ### 5. Create Submission
 
@@ -186,7 +225,7 @@ data:
 ### Model Settings
 ```yaml
 model:
-  architecture: efficientnet-b0
+  architecture: resnet18            # Default; auto-detected from checkpoint when possible
   encoder_weights: imagenet
   in_channels: 3           # RGB or multispectral
   classes: 1               # Binary change detection
@@ -231,7 +270,7 @@ postprocessing:
 ### Siamese U-Net
 ```
 Input: Two temporal images (T1, T2)
-├── Shared Encoder: EfficientNet-B0 (ImageNet pretrained)
+├── Shared Encoder: ResNet-18 (ImageNet pretrained by default)
 │   ├── Branch 1: Extract features from T1
 │   └── Branch 2: Extract features from T2 (shared weights)
 ├── Feature Fusion: Concatenate T1 and T2 features
@@ -257,11 +296,22 @@ Combined Loss = 0.5 × Dice Loss + 0.5 × Focal Loss
 
 ### ResourceSat-2 (LISS-4 MX Sensor)
 - **Resolution:** 5.8m (resampled to 5m)
-- **Bands:** 3 (Green, Red, NIR)
-- **Format:** Separate GeoTIFF per band (BAND2.tif, BAND3.tif, BAND4.tif)
+- **Bands:** 3 (BAND2=Green, BAND3=Red, BAND4=NIR)
+- **Format:** Separate GeoTIFF per band
+- **Structure:** `Dataset/R2FDDMMMYYYYHHMMSS.../R2FDDMMMYYYYHHMMSS.../BAND*.tif`
 - **Size:** 18,000 × 17,000 pixels (~620MB per band)
 - **CRS:** UTM Zone 43N, WGS84
-- **Dates:** March 2020, January 2025 (~5 years apart)
+
+### Sentinel-2 (MSI Sensor)
+- **Resolution:** 10m (bands B02, B03, B04, B08)
+- **Bands:** B03=Green, B04=Red, B08=NIR (used for change detection)
+- **Format:** JPEG2000 (.jp2) in .SAFE structure
+- **Structure:** `Dataset/*.SAFE/GRANULE/*/IMG_DATA/`
+- **Products:** L1C (Top-of-Atmosphere) and L2A (Bottom-of-Atmosphere)
+- **Size:** ~10,000 × 10,000 pixels per tile
+- **CRS:** UTM (zone-dependent), WGS84
+
+**Note:** The system auto-detects which data source you're using based on folder structure.
 
 ### Preprocessing Pipeline
 1. **Windowed Reading:** Load 256×256 tiles (never full image)
@@ -279,7 +329,7 @@ Combined Loss = 0.5 × Dice Loss + 0.5 × Focal Loss
 - **Training Time:** 2-3 hours (Kaggle T4 GPU)
 
 ### Inference Performance
-- **Speed:** ~5-10 minutes for 18K×17K image (CPU)
+- **Speed:** ~10-15 minutes for 18K×17K image (CPU)
 - **Memory:** <16GB RAM (tile-based processing)
 - **Output:** Binary mask + shapefile with preserved CRS
 
@@ -301,12 +351,16 @@ Combined Loss = 0.5 × Dice Loss + 0.5 × Focal Loss
 
 ### Issue: No changes detected in output
 **Solution:**
-- Check `threshold` in config (try 0.3 or 0.7)
-- Verify images are from different time points
-- Reduce `min_component_size` in post-processing
+- The pipeline includes an unsupervised fallback (CVA + ΔNDVI + Otsu) that activates automatically when the model output is empty or nearly empty.
+- You can tune `postprocessing` thresholds and morphology to refine results.
 
 ### Issue: Shapefile has wrong coordinates
 **Solution:** CRS is automatically preserved from input GeoTIFF. Verify input files have correct CRS.
+
+### Issue: Crash when exporting shapefile on NumPy 2.0
+**Symptoms:** ValueError from GeoPandas when calling `to_file` or `.apply()` on a GeoSeries.
+
+**Solution:** The vector export uses Fiona directly and converts Polygon→MultiPolygon safely without `.apply()`, avoiding NumPy 2.0 internals. This is implemented in `src/postprocessing/vectorize.py` and requires no user action.
 
 ### Issue: PyTorch installation fails
 **Solution:**
@@ -346,7 +400,7 @@ If you use this code, please cite:
   title={Satellite Change Detection System},
   author={Team AI},
   year={2024},
-  url={https://github.com/yourusername/satellite-change-detection}
+  url={https://github.com/Manvitha3004/PS-10}
 }
 ```
 
