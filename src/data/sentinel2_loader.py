@@ -71,7 +71,20 @@ class Sentinel2Product:
     
     def _find_granule_path(self) -> Path:
         """Find the granule folder containing image data."""
+        # Handle nested .SAFE structure (common in some distributions)
+        # Structure: *.SAFE/*.SAFE/GRANULE or *.SAFE/GRANULE
+        
+        # First try direct GRANULE
         granule_dir = self.safe_path / 'GRANULE'
+        
+        # If not found, check for nested .SAFE folder
+        if not granule_dir.exists():
+            nested_safe = list(self.safe_path.glob('*.SAFE'))
+            if nested_safe and len(nested_safe) == 1:
+                # Use the nested .SAFE folder as the actual product root
+                self.safe_path = nested_safe[0]
+                granule_dir = self.safe_path / 'GRANULE'
+        
         if not granule_dir.exists():
             raise FileNotFoundError(f"GRANULE folder not found in {self.safe_path}")
         

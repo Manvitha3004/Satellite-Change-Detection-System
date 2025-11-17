@@ -81,20 +81,30 @@ def main():
     safe_folders = list(data_dir.glob('*.SAFE'))
     
     if safe_folders:
-        print(f"  Data source: Sentinel-2 ({len(safe_folders)} products found)")
+        print(f"  Checking Sentinel-2 products ({len(safe_folders)} .SAFE folders found)...")
         image_pairs = {}
         
         for safe_folder in safe_folders:
             try:
-                s2_product = detect_sentinel2_product(safe_folder)
-                if s2_product:
-                    # Extract date from product name
-                    date = s2_product.safe_path.name.split('_')[2][:8]  # YYYYMMDD
-                    band_files, _ = s2_product.get_rgb_nir_bands()
-                    image_pairs[date] = band_files
-                    print(f"    {date}: {s2_product.product_level}, 3 bands (Green, Red, NIR)")
+                # Direct instantiation instead of detect function
+                from data.sentinel2_loader import Sentinel2Product
+                s2_product = Sentinel2Product(safe_folder)
+                
+                # Extract date from product name
+                date = s2_product.safe_path.name.split('_')[2][:8]  # YYYYMMDD
+                band_files, _ = s2_product.get_rgb_nir_bands()
+                image_pairs[date] = band_files
+                print(f"    ✓ {date}: {s2_product.product_level}, 3 bands (Green, Red, NIR)")
             except Exception as e:
-                print(f"    Warning: Could not process {safe_folder.name}: {e}")
+                print(f"    ✗ {safe_folder.name}: Incomplete/invalid ({str(e)[:60]}...)")
+        
+        # If no valid Sentinel-2 products, fall back to ResourceSat-2
+        if len(image_pairs) == 0:
+            print("  No valid Sentinel-2 imagery found (empty GRANULE folders)")
+            print("  Falling back to ResourceSat-2 (LISS-4)...")
+            image_pairs = find_resourcesat2_bands(data_dir)
+        else:
+            print(f"  Data source: Sentinel-2")
     else:
         print("  Data source: ResourceSat-2 (LISS-4)")
         image_pairs = find_resourcesat2_bands(data_dir)
