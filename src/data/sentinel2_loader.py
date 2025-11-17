@@ -71,8 +71,9 @@ class Sentinel2Product:
     
     def _find_granule_path(self) -> Path:
         """Find the granule folder containing image data."""
-        # Handle nested .SAFE structure (common in some distributions)
-        # Structure: *.SAFE/*.SAFE/GRANULE or *.SAFE/GRANULE
+        # Handle multiple .SAFE structure patterns:
+        # Pattern 1: *.SAFE/GRANULE/L2A_*/  (standard)
+        # Pattern 2: *.SAFE/*.SAFE/GRANULE/L2A_*/  (some distributions have nested .SAFE)
         
         # First try direct GRANULE
         granule_dir = self.safe_path / 'GRANULE'
@@ -88,16 +89,17 @@ class Sentinel2Product:
         if not granule_dir.exists():
             raise FileNotFoundError(f"GRANULE folder not found in {self.safe_path}")
         
-        # Get first granule (typically only one)
-        granules = list(granule_dir.iterdir())
+        # Get first granule subfolder (typically only one, e.g., L2A_T43RCM_A024884_20200328T054415)
+        granules = [d for d in granule_dir.iterdir() if d.is_dir()]
         if not granules:
-            raise FileNotFoundError(f"No granules found in {granule_dir}")
+            raise FileNotFoundError(f"No granule subfolders found in {granule_dir}")
         
         return granules[0]
     
     def _find_band_files(self) -> Dict[str, Path]:
         """
         Find all band files in the product.
+        Prioritizes 10m resolution bands for consistency.
         
         Returns:
             Dictionary mapping band names (e.g., 'B02') to file paths
@@ -114,14 +116,29 @@ class Sentinel2Product:
         if not img_data_dir.exists():
             raise FileNotFoundError(f"IMG_DATA folder not found in {self.granule_path}")
         
-        # Search for band files (handles both L1C and L2A structures)
-        for pattern in ['**/*_B*.jp2', '**/*_B*.tif']:
-            for file_path in img_data_dir.glob(pattern):
-                # Extract band name (e.g., B02, B8A)
+        # For L2A, prioritize 10m resolution folder
+        r10m_dir = img_data_dir / 'R10m'
+        if r10m_dir.exists():
+            # Read 10m bands first
+            for file_path in r10m_dir.glob('*_B*.jp2'):
                 match = re.search(r'_(B\d{2}A?)(?:_|\.)', file_path.name)
                 if match:
                     band_name = match.group(1)
                     band_files[band_name] = file_path
+        
+        # If no 10m directory or need more bands, search recursively
+        if len(band_files) == 0:
+            for pattern in ['**/*_B*.jp2', '**/*_B*.tif']:
+                for file_path in img_data_dir.glob(pattern):
+                    # Extract band name and resolution
+                    match = re.search(r'_(B\d{2}A?)_(\d+)m', file_path.name)
+                    if match:
+                        band_name = match.group(1)
+                        resolution = int(match.group(2))
+                        
+                        # Prefer 10m resolution if band exists in multiple resolutions
+                        if band_name not in band_files or resolution == 10:
+                            band_files[band_name] = file_path
         
         if not band_files:
             raise FileNotFoundError(f"No band files found in {img_data_dir}")
