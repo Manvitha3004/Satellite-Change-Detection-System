@@ -2,7 +2,7 @@
 
 Production-ready deep learning system for detecting changes in bi-temporal satellite imagery using ResourceSat-2 (5m resolution) and Sentinel-2 (10m resolution) data.
 
-## 🎯 Project Overview
+## Project Overview
 
 This system implements a **Siamese U-Net** architecture (default encoder: ResNet-18; auto-detected from your checkpoint) for semantic change detection in satellite imagery. It's designed to:
 
@@ -13,19 +13,19 @@ This system implements a **Siamese U-Net** architecture (default encoder: ResNet
 
 ### Key Features
 
-✅ Memory-efficient windowed processing (never loads full 18K×17K images)  
-✅ CPU-optimized inference with tile-based prediction  
-✅ Combined Dice + Focal loss for handling class imbalance  
-✅ Morphological post-processing and vectorization  
-✅ Complete training pipeline with validation and checkpointing  
-✅ Mixed precision training (AMP) for faster GPU training  
-✅ CRS and geotransform preservation throughout pipeline  
-✅ Robust vector export using Fiona (NumPy 2.0 compatible)  
-✅ Unsupervised fallback (CVA + ΔNDVI + Otsu) when model predicts empty masks
+Memory-efficient windowed processing (never loads full 18K×17K images)  
+CPU-optimized inference with tile-based prediction  
+Combined Dice + Focal loss for handling class imbalance  
+Morphological post-processing and vectorization  
+Complete training pipeline with validation and checkpointing  
+Mixed precision training (AMP) for faster GPU training  
+CRS and geotransform preservation throughout pipeline  
+Robust vector export using Fiona (NumPy 2.0 compatible)  
+Unsupervised fallback (CVA + ΔNDVI + Otsu) when model predicts empty masks
 
 ---
 
-## 📁 Project Structure
+## Project Structure
 
 ```
 PS-10/
@@ -73,7 +73,7 @@ PS-10/
 
 ---
 
-## 🚀 Quick Start
+## Quick Start
 
 ### 1. Installation (Local - Windows)
 
@@ -102,6 +102,17 @@ python scripts\1_generate_patches.py `
     --output_dir data\patches `
     --config configs\config.yaml
 ```
+Model Architecture
+Siamese U-Net
+Input: T1, T2 images
+↓
+Shared ResNet-18 Encoder
+↓
+Feature Fusion
+↓
+U-Net Decoder with skip connections
+↓
+Binary change mask
 
 **Supported structures:**
 - ResourceSat-2: `Dataset/R2F.../R2F.../BAND*.tif`
@@ -321,7 +332,7 @@ Combined Loss = 0.5 × Dice Loss + 0.5 × Focal Loss
 
 ---
 
-## 📈 Expected Performance
+## Expected Performance
 
 ### Training Metrics (50 epochs)
 - **Best Validation IoU:** 0.65-0.75 (depends on data quality)
@@ -335,7 +346,7 @@ Combined Loss = 0.5 × Dice Loss + 0.5 × Focal Loss
 
 ---
 
-## 🛠️ Troubleshooting
+## Troubleshooting
 
 ### Issue: Out of Memory during training
 **Solution:** Reduce `batch_size` in config.yaml (try 8 or 4)
@@ -371,7 +382,7 @@ pip install torch==2.0.1 torchvision==0.15.2 --index-url https://download.pytorc
 
 ---
 
-## 📚 Technical Details
+## Technical Details
 
 ### Memory Management
 - **Patch Generation:** Reads 256×256 windows, processes immediately, never accumulates
@@ -391,7 +402,7 @@ pip install torch==2.0.1 torchvision==0.15.2 --index-url https://download.pytorc
 
 ---
 
-## 🎓 Citation
+## Citation
 
 If you use this code, please cite:
 
@@ -418,15 +429,15 @@ Contributions welcome! Please open an issue or submit a pull request.
 
 ---
 
-## 📧 Contact
+## Contact
 
 For questions or issues:
 - Open a GitHub issue
-- Email: your.email@example.com
+- Email: manvithareddy3004@gmail.com
 
 ---
 
-## 🔄 Version History
+## Version History
 
 - **v1.0.0** (November 2024) - Initial release
   - Siamese U-Net architecture
